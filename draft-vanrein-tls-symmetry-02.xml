@@ -1,0 +1,492 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="rfc2629.xslt"?>
+<!DOCTYPE rfc SYSTEM "rfc2629.dtd">
+
+<?rfc toc="yes" ?>
+<?rfc compact="yes" ?>
+<?rfc symrefs="yes" ?>
+<?rfc subcompact="no" ?>
+<?rfc comments="yes" ?>
+<?rfc inline="yes" ?>
+
+<rfc ipr="trust200902" docName="draft-vanrein-tls-symmetry-02" category="std">
+
+<front>
+
+<!--
+	<title abbrev="P2P TLS">Connecting TLS between Symmetric Peers</title>
+-->
+	<title abbrev="TLS Symmetry">Symmetry for Transport Layer Security</title>
+
+	<author initials="R" surname="Van Rein" fullname="Rick van Rein">
+		<!-- <organization>OpenFortress B.V.</organization> -->
+		<organization>ARPA2.net</organization>
+		<address>
+			<postal>
+				<street>Haarlebrink 5</street>
+				<city>Enschede</city>
+				<region>Overijssel</region>
+				<code>7544 WP</code>
+				<country>The Netherlands</country>
+			</postal>
+			<email>rick@openfortress.nl</email>
+		</address>
+	</author>
+
+	<author initials="T" surname="Vrancken" fullname="Tom Vrancken">
+		<!-- <organization>V studios</organization> -->
+		<organization>ARPA2.net</organization>
+		<address>
+			<postal>
+				<street>Imstenrade 24</street>
+				<city>Eindhoven</city>
+				<region>Noord-Brabant</region>
+				<code>5655 BN</code>
+				<country>The Netherlands</country>
+			</postal>
+			<email>t.vrancken@v-studios.nl</email>
+		</address>
+	</author>
+
+	<date day="16" month="November" year="2716"/>
+
+	<abstract>
+	<t>TLS is inserted between the transport and application layers of many
+	network stacks to add security.  To make this generally possible, it
+	should not add restrictions, but in fact it does enforce a model with
+	predetermined client/server roles and initiation from the client.  These
+	constraints are removed by using the extensions to the TLS protocol flow
+	from this specificaion.</t>
+	</abstract>
+
+</front>
+
+<!--
+
+CHANGES FROM 01 TO 02:
+* Radical protocol design changes; basically rewrote the protocol
+* Removed the TLS Extension, relying on handshake Random as a role tie-breaker
+* Use hello messages to offer a role; HelloRequest can be a server's initiative
+* A few unsolved cases remain (and require reconnect) but only in glitches
+* Included diagrams for all cases
+* Made Tom a document co-author
+
+CHANGES FROM 00 TO 01:
+* Included an implicit mode (without extension) for pre-agreed peers
+
+-->
+
+
+<middle>
+
+<section title="Introduction" anchor="intro">
+
+<t>TLS is often used as a "drop in" security layer, but the normal flow of TLS
+only really handles protocols with separate client and server roles, where the
+client is the initiating party.  Some protocol designs however, may want or need
+to be impartial to these roles and initiatives at both the
+application and transport layers, but once TLS is inserted in between they are
+forced to establish them.</t>
+
+<t>Examples of application protocols that do not suggest client and server
+roles for nodes include XMPP and SIP in peer-to-peer mode, or some uses of the
+symmetric MSRP protocol.  In addition, many new protocols are being design
+to operate symmetrically from the ground up because they
+are meant for peer-to-peer operation.</t>
+
+<t>TLS and its DTLS variation can be carried over transports UDP, TCP and SCTP.
+It is commonly understood that UDP can be initiated from both sides
+at the same time; and though less well-known,
+TCP and SCTP can also be setup between two active nodes; in this
+situation both nodes initiate the connection, and as a result of network
+communication delays these attempts cross midway.  And indeed, this is even
+a practically possible situation when one or both nodes have a known address,
+for instance as a result of prior exchange of transparent addresses.
+Furthermore, firewalls and other middle boxes must
+[Section 4.2 of <xref target="RFC5382"/>]
+faithfully implement the TCP state diagrams
+[Figure 6 of <xref target="RFC0793"/>] to enable this simultaneous-open between
+two active nodes.  Lacking an obvious active and passive side
+for at least some transport connections means that this is not always available as
+a tie-breaker to assign TLS client and TLS server rolese.</t>
+
+<t>This specification prefixes messages to the TLS protocol flow
+to negotiate the client/server role assignment, as well as to permit the TLS server
+to take the initiative in setting up the connection.  In addition, TLS nodes
+may choose to start in passive mode, and switch to active mode when data has be
+sent.</t>
+
+</section>
+
+<section title="Preliminary Messages" anchor="prelim">
+
+<t>This specification extends the TLS protocol flow with preliminary handshake
+messages.  Removal of these extra messages reconstructs a
+normal TLS protocol flow.  The following subsections describe these
+preliminary messages.</t>
+
+<section title="Passive Connections start Silently" anchor="prelim-silence">
+
+<t>Normal TLS defines the client to be active and the server to be passive,
+in terms of the TLS handshake.  Under the extensions of this specificition,
+it is a choice for each node whether they are active or passive.  It is possible
+for both nodes to start in passive mode, meaning that no TLS handshakes are
+exchanged until the first side switches from passive to active.</t>
+
+<t>A node can only switch from passive to active when it has neither sent nor
+received data before.  After the handshake has succeeded, data can be
+sent in either direction and the question which nodes are passive or active
+does not matter anymore.</t>
+
+<t>It is worth noting that race conditions can arise, causing both sides to
+switch to active mode at the same time.  This specification describes solutions
+for these situations; when both sides are acting as peers, meaning that they
+are willing to take on either client or server roles, they will always succeed
+to resolve such conditions and establish a connection.</t>
+
+
+</section>
+
+<section title="Initial HelloRequest" anchor="prelim-helloreq">
+
+<t>Under normal TLS, the HelloRequest [Section 7.4.1.1 of <xref target="RFC5246"/>]
+is not recommended to be sent by a server as soon as a client connects to it,
+but it is also forgiving, by ignoring the message if it is sent.  
+  When the
+remote node takes an initiative and the local node is willing to play the
+role of a passive server, we also specify that it should wait for an incoming
+ClientHello.  However, when assuming a passive client on the other end, which
+is not foreseen in the TLS specification, then a reason arises to send this
+message, possibly even as soon as the connection is established.</t>
+
+<t>The HelloRequest is not meant to determine which side is client and which
+is server, at least not under the original TLS specification;
+this specification extends that notion, by allowing a server to initiate
+a connection to a client and then have it send a HelloRequest to indicate that
+the receiving end should act as a client.  This too is a configuration that
+is not foreseen in the standard TLS protocol flow.</t>
+
+</section>
+
+<section title="Tie-breaking between two ClientHello" anchor="prelim-tiebreak">
+
+<t>When both nodes send a ClientHello, they are both offering to play the role
+of a client.  This may happen when both parties act at the same time.  Under this
+specification it does not necessarily imply that the client role is the only
+possibility, it merely indicates that the current offer is to act as a client.</t>
+
+<t>Normally, when a ClientHello arrives at a node that is willing to act as a
+server, it will simply continue with a ServerHello.  However, distributed control
+and transit delays can cause race conditions leading to a ClientHello to be
+sent from both nodes.</t>
+
+<t>When both TLS nodes are offering a ClientHello, then one should be asked to change.
+The following tie-breaking mechanism is used to find the same conclusion
+independently on both ends of the connection:
+<list style="numbers">
+<t>If the random material in both ClientHello is the same, send a handshaking TLS Alert;</t>
+<t>Combine the random material from both ClientHello messages with exclusive-or;</t>
+<t>Find the last non-zero byte in the result, and within that byte, the lowest-valued non-zero bit;</t>
+<t>Lookup the bit at the same position in the locally generated ClientHello random;</t>
+<t>When that bit is 0, continue as a client; when it is 1, continue as a server.  Note how the two nodes come to opposite conclusions.</t>
+</list>
+</t>
+
+<t>The ClientHello sent by the node continuing as a server should be dropped
+by both nodes, and the server node should process the client node's ClientHello.
+The TLS protocol computes a secure hash over the handshake messages, for use
+in later phases of the handshake.  These hashes should not include the ClientHello
+that was dropped, on either side of the connection.</t>
+
+<t>It should be safe to reuse the random material from the dropped
+ClientHello in the upcoming ServerHello within the same TLS connection.</t>
+
+</section>
+
+<section title="Switch from Server Node to Client Node" anchor="prelim-2s2c">
+
+<t>In the accidental situation where both nodes initiate with a HelloRequest,
+they are both trying to be a server.  In this case, any side that is willing
+to be a client sends a ClientHello.  The other node may respond with ServerHello
+or ClientHello; in the latter case, the tie-breaking procedure for two
+ClientHello is used.</t>
+
+</section>
+
+<section title="Last Resort: Abort or Reconnect" anchor="mech-lastresort">
+
+<t>There are a few situations where the protocol extension specified here cannot
+build up a connection, even if it would be possible in theory.  Given a concrete
+protocol, these can usually be avoided, but in rare cases it might be necessary
+to handle them.  It is then up to the application what action of last resort to
+choose.</t>
+
+<t>When the protocol ends up needing last-resort cases,
+the application can choose between abortion or reconnection.  In the case of
+a reconnect, the side that implements this specification and is open to either
+client or server role should be instructed to make the other choice.</t>
+
+<t>When a reconnect is needed, this may have to be done in full sight of the
+application.  For example, a protocol using a STARTTLS command may report an
+error code that suggests trying again, but leave the original plaintext
+connection open for another STARTTLS attempt.</t>
+
+</section>
+
+</section>
+
+
+<section title="Procedures for TLS Nodes" anchor="proc">
+
+<t>The following subsections spell out the (modified) behaviour, depending on the
+role(s) that an implementing node is willing to play.  The name "peer" is used
+below to indicate a node that is willing to be either a client or a server.</t>
+
+<t>Note that sound reasons may exist for either, or even both ends, to take on
+a passive role even when they intend to be connected.  Actually performing the
+handshake may be deferred until either side wants to pass data; until that point,
+the two sides listen passively.</t>
+
+<section title="Procedures for TLS Client Nodes" anchor="proc-client">
+
+<t>Clients are those nodes that insist on playing the role of a TLS client.
+This is not necessarily related to the role in the underlying transport, or
+the overlying application.  The term client node as used herein assumes
+that the node implements this specification.</t>
+
+<t>The following can happen in a client node:
+<list style="symbols">
+<t>Active TLS clients send out a ClientHello and use it as in the normal TLS protocol flow;
+protocol <xref target="RFC5246"/>;</t>
+<t>Passive TLS clients receiving HelloRequest will continue as though they had been active TLS clients;</t>
+<t>TLS clients receiving ClientHello will respond with a Handshake Alert message.</t>
+</list>
+</t>
+
+<t>TODO: Can the Handshake Alert be non-fatal, and if so, can we simplify recovery by not resetting the connection but just starting the handshake from scratch?  If so, then we can remove the annoyance of visible connection failure.</t>
+
+</section>
+
+<section title="Procedures for TLS Server Nodes" anchor="proc-server">
+
+<t>Servers are those nodes that insist on playing the role of a TLS server.
+This is not necessarily related to the role in the underlying transport, or
+the overlying application.  The term server node as used herein assumes
+that the node implements this specification.</t>
+
+<t>The following can happen in a server node:
+<list style="symbols">
+<t>Passive TLS servers await an incoming ClientHello and process it in the manner
+that is standard for TLS;</t>
+<t>Active TLS servers send out a HelloRequest and wait for an incoming ClientHello, which they process as they would have in a passive TLS server role;
+the HelloRequest must not repeat within the connection until the handshake has
+finished, but some transports have no notion of a connection, in which case
+timer-based resends of the HelloRequest are plausible;</t>
+<t>Active TLS servers that receive a HelloRequest cannot switch to client mode,
+so they will switch to being active TLS servers, and learn whether this leads to
+a workable connection.</t>
+</list>
+</t>
+
+<t>TODO:The response to HelloRequest is not optimal, but at least it avoids deadlocks or delays in detecting setup failure.  We might consider to handle HelloRequest races by allowing the bundling of the HelloRequest and (the start of?) the subsequent ClientHello in one TLS record, as a signal to the other side that we are not going to sit and wait for a ClientHello.  This might convince the sender to back off into server mode.  But it is ugly (as it cuts through abstraction layers) to speak of the start of a handshake message and its containment in the same record.</t>
+
+</section>
+
+<section title="Procedures for TLS Peer Nodes" anchor="proc-peer">
+
+<t>Peers are those nodes that do insist on playing either a TLS client or TLS server
+role.  It generally aims to respond flexibly to incoming requests, which works best
+when it is in a passive role.  The peer role is not necessarily related to the role
+in the underlying transport, or the overlying application.  The term peer node as
+used herein assumes that the node implements this specification.</t>
+
+<t>The following can happen in a peer node:
+<list style="symbols">
+<t>Passive TLS peers receiving a ClientHello take on the role of a server
+and process the ClientHello in the manner that is standard for a TLS server;</t>
+<t>Passive TLS peers receiving a HelloRequest take on the role of a client and
+start by sending a ClientHello;</t>
+<t>Active TLS peers may act as either an active TLS client or an active TLS server,
+depending on what they expect to be acceptable on the remote end; the application
+may provide hints to indicate which variation to try, so that failure with one may
+lead to a reconnection attempt with the other;</t>
+<t>In extension to the TLS client variant, when a ClientHello is both sent and
+received over a connection, the peer node will use the tie-breaking mechanism to
+decide whether to continue as a TLS client or as a TLS server;</t>
+<t>In extension to the TLS server variant, when a HelloRequest is both sent and
+received over a connection, the peer node will switch to the TLS client variant,
+including the optional tie-breaker based on bidirectional ClientHello.</t>
+</list>
+</t>
+
+</section>
+
+</section>
+
+
+<section title="Rejected Protocol Flows" anchor="reject">
+
+<t>The result of the foregoing rules is that a few protocol flows are not acceptable.
+Sometimes this is as desired, sometimes it is not.</t>
+
+<section title="Rightfully Rejected Traces" anchor="reject.good">
+
+<t>The following situations rightfully bail out.  Timing may influence whether the
+parties both send a message, or whether only one side sends a message, but in
+either case a reset of the connection is the (desired) result.</t>
+
+<t>
+<list style="symbols">
+<t>Two client nodes trying to connect will send each other a ClientHello, not feel
+like performing the tie-breaker, and at least the first one to receive the
+remote client's ClientHello will reset the connection.</t>
+<t>Two server nodes trying to connect may (at some point) send a HelloRequest, which
+is considered a failure to follow the proper handshake procedure.  At least the
+first side receiving the HelloRequest will reset the connection.</t>
+</list>
+</t>
+</section>
+
+<section title="Undesirably Rejected Traces" anchor="reject.bad">
+
+<t>The following situations bail out but do not strictly need to; when the
+active side is a peer node, it needs to make a choice and this may not work with
+the remote end if that happens to be a client node or a server node.  Since the
+remote is not expected to change that attitude in later attempts, the active
+peer node can choose the other strategy in its reconnection attempt.</t>
+
+<t>The avoidance of undesirable trace rejection is possible in many cases.
+When all nodes are either client or server, they function as they always have
+under TLS.  Alternatively, when all nodes are peer nodes, they will always
+find a way to collaborate.  Only when seeking interoperability between
+standard TLS and TLS enhanced by this specification could the undesirable
+rejections arise.</t>
+
+</section>
+
+</section>
+
+
+<section title="Configuring TLS for Symmetric Behaviour" anchor="config">
+
+<t>Most current applications of TLS run in either a client or a server role, and
+will specify their authentication and encryption requirements in term of that role.
+For example, it is often assumed that a client does not offer
+authentication, but that a server will authenticate to the client.
+The client thereby becomes the party responsible of detecting
+man-in-the-middle attacks, because the server cannot distinguish an honest client
+from a rogue one.  This protocol flow is asymmetric, and as a result
+so is its configuration.</t>
+
+<t>When welcoming both client and server roles, the TLS implementation defers
+knowing about
+the actual client and server role assignment, and the application using it will
+be considered as a peer node.  This has an impact on the configuration, which
+must now speak in terms of local and remote configuration, instead of in terms
+of client and server configuration.  Not all CipherSuites are equally suited
+for this mode of operation, but use cases that require mutual authentication
+are reasonably well-supported, and are also the most likely for symmetric
+peer-to-peer applications of TLS.</t>
+
+<t>TLS implementations that can end up being either a client or a server
+SHOULD permit separate configuration of the various parameters that are
+negotiated during the ClientHello, ServerHello handshake.  They should permit
+separate CipherSuite lists for the two roles, for instance, and their use of
+Server Name Indications and other extensions may also differ between the two
+roles.</t>
+
+</section>
+
+<!--
+<section title="Efficiency Considerations" anchor="efficiency">
+
+<t>The extensions to TLS proposed here may cause one extra message to be sent,
+namely an initial HelloRequest.  This extra message is only sent in new cases,
+namely where a server wants to actively start a connection.  In all other cases,
+the message flow is preserved as customary.</t>
+
+</section>
+-->
+
+
+<!--
+<section title="Privacy Considerations" anchor="privacy">
+
+<t>No new privacy concerns raised by these extensions.</t>
+
+</section>
+-->
+
+
+<section title="Security Considerations" anchor="security">
+
+<t>This specification introduces more dynamicity to TLS, and that is automatically
+a concern.  The additional flexibility is achieved through preliminary messages
+that prefix the actual TLS connection, so the connection inherits the security
+properties of a normal TLS connection.</t>
+
+<t>The additional flows do introduce new ways of denying the connection, for
+instance by insisting on a particular role through injection by a middle man.
+The same middle man could also achieve denial more directly however, by
+inserting an alert in the message flow, so this does not add new risks.</t>
+
+<t>Finally, the flow might be setup in a direction opposing what could be
+expected.  To that end, it is good to realise that the eventual protocol once
+again is a plain TLS connection, and nodes are already keen on adhering
+to the protocol flow that they expect; only when they are open to changing
+roles could this actually be done.  And if they are open to such changes, then
+they will have been configured accordingly.  So, once again, there is no new
+risk introduced by this facility.</t>
+
+</section>
+
+
+<section title="IANA Considerations" anchor="iana">
+
+<t>This specification requires no registrations to be made by IANA.</t>
+
+</section>
+
+
+</middle>
+
+
+<back>
+
+<references title="Normative References">
+
+<?rfc include="reference.RFC.0793.xml"?>
+<?rfc include="reference.RFC.5246.xml"?>
+<?rfc include="reference.RFC.5382.xml"?>
+
+</references>
+
+<!--
+<references title="Informative References">
+
+<?rfc include="reference.RFC.2712.xml"?>
+<?rfc include="reference.RFC.3280.xml"?>
+<?rfc include="reference.RFC.4282.xml"?>
+<?rfc include="reference.RFC.4422.xml"?>
+<?rfc include="reference.RFC.4559.xml"?>
+<?rfc include="reference.RFC.6698.xml"?>
+<?rfc include="reference.RFC.6960.xml"?>
+
+</references>
+-->
+
+
+<section title="Acknowledgements" anchor="ack">
+
+<!--
+<t>Thanks go to XXX for useful discussions during the creation of this
+document.</t>
+-->
+
+<t>This work was conducted under an SIDNfonds grant for the "p2p toolkit" project.</t>
+
+</section>
+
+</back>
+
+</rfc>

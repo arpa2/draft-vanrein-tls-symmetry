@@ -1,0 +1,280 @@
+<?xml version="1.0"?>
+<?xml-stylesheet type="text/xsl" href="rfc2629.xslt"?>
+<!DOCTYPE rfc SYSTEM "rfc2629.dtd">
+
+<?rfc toc="yes" ?>
+<?rfc compact="yes" ?>
+<?rfc symrefs="yes" ?>
+<?rfc subcompact="no" ?>
+<?rfc comments="yes" ?>
+<?rfc inline="yes" ?>
+
+<rfc ipr="trust200902" docName="draft-vanrein-tls-kdh-pre00" category="std">
+
+<front>
+
+	<title abbrev="P2P TLS">TLS setup between Equal Peers</title>
+
+	<author initials="R" surname="Van Rein" fullname="Rick van Rein">
+		<!-- <organization>OpenFortress B.V.</organization> -->
+		<organization>ARPA2.net</organization>
+		<address>
+			<postal>
+				<street>Haarlebrink 5</street>
+				<city>Enschede</city>
+				<region>Overijssel</region>
+				<code>7544 WP</code>
+				<country>The Netherlands</country>
+			</postal>
+			<email>rick@openfortress.nl</email>
+		</address>
+	</author>
+
+	<date day="12" month="October" year="2015"/>
+
+	<abstract>
+	<t>TLS is a generic protocol that runs over various other transports,
+	and that in turn carries many application protocols.  All current
+	transports and at least some application protocols are capable of
+	running between equal peers, in so-called peer-to-peer mode, but the
+	use of TLS destroys that capability.  This specification defines an
+	extension to remedy that limitation.</t>
+	</abstract>
+
+</front>
+
+
+<middle>
+
+<section title="Introduction" anchor="intro">
+
+<t>TLS is a successful carrier for application data on the Internet; applications
+like SIP and XMPP can be run directly between peers, possibly after discovery
+through a mechanism like DNS-SD.  Protection of these connections is possible
+with TLS, but that requires a sudden notion of which side acts as client, and
+which as server.  This notion is not strictly required for the applications.</t>
+
+<t>TLS can be carried over transports UDP, TCP and SCTP.  It is commonly
+understood that UDP can be initiated from either side, but it is less well-known
+that TCP and SCTP can also be connected when both end points are active.  And
+indeed, this is achievable when one or both end points have a known address,
+for instance as a result of transparent addressing.  Lacking an obvious active
+and passive side, there is no default to assume for the assignment of client and
+server roles for TLS.</t>
+
+<t>Finally, the need to authenticate a remote may help to decide which side must
+play the role of client, and which is to be the server.  In situations with
+mutual authentication using a more-or-less symmetric authentication scheme,
+this last cause for a client/server role division in TLS disappears.</t>
+
+<t>This specification introduces a TLS extension that can be used to indicate
+that the client/server role division is open for negotiation.  It can also be
+used by a server that wants to actively initiate a connection to a client.
+The general idea is that both end points may send a ClientHello, and based
+on the new extension a fully deterministic choice is made how to proceed.</t>
+
+<figure><artwork><![CDATA[
+Client                                               Server
+
+                             <--------        [ClientHello]
+ClientHello                  -------->
+                                              [ClientHello]
+                                                ServerHello
+                                          ServerKeyExchange
+                             <--------      ServerHelloDone
+ClientKeyExchange
+[ChangeCipherSpec]
+Finished                     -------->
+                                         [ChangeCipherSpec]
+                             <--------             Finished
+Application Data             <------->     Application Data
+]]></artwork></figure>
+
+</section>
+
+
+<section title="The tls_role_preference Extension" anchor="extdef">
+
+<t>The tls_role_preference extension encapsulates a byte string of at least 1 byte
+and at most 32 bytes; each of the bytes must have a value of at least 33 and no more than 126; this makes the characters suitable for textual protocols.</t>
+
+<t>These tls_role_preference values may be compared on a byte-by-byte basis to determine whether one is ordered before another.  When the first byte value in a corresponding position is less in one then in another, then the one is said to be ordered before the other.  When the starting characters in one tls_role_preference value is replicated in another but with extra characters appended, then the one value is said to be ordered before the other.  When one tls_role_preference values is exactly the same as another, they are said to be ordered as equals.  When one tls_role_preference value is neither ordered before, nor as an equal to another, then the one is said to be ordered after the other.</t>
+
+<t>An easy way to remember these ordering rules is that "client" is ordered before "server"; and this hints at the intention: if one tls_role_preference value is ordered before another, then the party who sent the one value should take on the role of TLS client, whereas the party that sent the other value should take on the role of TLS server.  When two tls_role_preference are ordered as equal then the surrounding TLS handshake fails, on grounds of not being able to establish a client/server role distinction, which should be reported through a handshake_failure alert.</t>
+
+</section>
+
+<section title="Procedures" anchor="proc">
+
+<t>This section defines procedures for sending ClientHello and processing the
+reception of one.</t>
+
+<section title="Sending ClientHello with tls_role_preference Extension" anchor="send">
+
+<t>A ClientHello with the tls_role_preference extension may be sent once by
+each of the sides, as the initiation of a TLS handshake.  The order in which
+the sides send this extension is arbitrary.  It is only possible to send a
+ClientHello with the tls_role_preference as the first record in a TLS handshake,
+either on a fresh connection or during (secure) renegotiation.</t>
+
+<t>It is considered an error condition when both sides send a ClientHello
+but not both incorporate the tls_role_preference extension.  This must result
+in a an alert, the code of which should be handshake_alert.  This implies that
+a server that is uncertain about client support of the extension should wait
+for a ClientHello, and respond with a ClientHello only when the tls_role_preference
+extension is present.  In situations where it is known or assumed that both
+sides support the tls_role_preference extension it is safe to transmit the
+extension at any time.</t>
+
+<t>The tls_role_preference value comprising of a single byte valued 33 will never
+have a value ordered before it; this can be sent to require a client role.  The
+tls_role_preference value comprising of 32 bytes, all valued 126, will never
+have a value ordered after it; this can be sent to require a server role.  When
+both sides require the same role, a handshake_error alert will be the result.</t>
+
+<t>When a side in the TLS hanshake is neutral about its role as a client or a
+server, it can send any value in between, and it should send a random value to
+achieve a high probabily of working with any remote side.  The probability of
+running into a random value from the remote that happens to be the same will be
+negligable for long enough extension values.</t>
+
+</section>
+
+<section title="Receiving ClientHello with tls_role_preference Extension" anchor="recv">
+
+<t>When a ClientHello with the tls_role_preference is received and a ClientHello has not been sent yet, then a ClientHello with the tls_role_preference must be sent before anything else.</t>
+
+<t>After a ClientHello with tls_role_preference is both sent and received, their values can be ordered.  When the value sent is ordered before the value received, the local side will continue as a TLS client and the value sent continues as the ClientHello record for the TLS handshake, whereas the value received is strikken from the TLS handshake.  When the value sent is ordered after the value received, the local side will continue as a TLS server and the value received continues as the ClientHello record for the TLS Handshake, whereas the value sent is strikken from the TLS handshake.  When the values sent and received are ordered as equals, a handshake_error alert is locally processed..</t>
+
+</section>
+
+</section>
+
+<section title="Efficiency Considerations" anchor="efficiency">
+
+<t>The proposed protocol introduces one more record exchanged during a TLS
+handshake.  When this record is generated asynchronously, there is no need for
+an extra roundtrip, as both sides simply start sending it as soon as they see
+the connection come up.  This however, is only possible when it is known that
+the extension is supported; note that this would be the most common situation
+in peer-to-peer protocols.</t>
+
+<t>When the extension is negotiated by a side that defaults to the client role,
+then a side that defaults to the server role would await it and be required to
+send a response.  If this response lets the sides take on their default roles,
+then no extra roundtrip is required but an additional ClientHello is prefixed
+to the ServerHello.  If the response switches sides, then half a roundtrip is
+added, as the sides switch their roles.</t>
+
+<t>The generated random values for the tls_role_preference extension need not
+be cryptographically secure values; they merely exist to force a decision on
+the client/role decision under the assumption of a symmetric authentication
+protocol.  This can be achieved with a lower quality random number generator.</t>
+
+</section>
+
+
+<section title="Privacy Considerations" anchor="privacy">
+
+</section>
+
+
+<section title="Security Considerations" anchor="security">
+
+<t>TODO: added dynamicity: role switch does not apply to the application; either side may enforce their role; symmetric authentication; renegotiate always started from the client</t>
+
+</section>
+
+
+<section title="IANA Considerations" anchor="iana">
+
+<t>TODO: register an extension code for tls_role_preference.</t>
+
+</section>
+
+
+</middle>
+
+
+<back>
+
+<references title="Normative References">
+
+<!-- EXTERNAL <?rfc include="reference.RFC.1035.xml"?> -->
+<!-- EXTERNAL <?rfc include="reference.RFC.4033.xml"?> -->
+<?rfc include="reference.RFC.4120.xml"?>
+<?rfc include="reference.RFC.4492.xml"?>
+<?rfc include="reference.RFC.5246.xml"?>
+<?rfc include="reference.RFC.5746.xml"?>
+<?rfc include="reference.RFC.6066.xml"?>
+
+</references>
+
+<references title="Informative References">
+
+<reference anchor='KRB5-KDH'>
+<front>
+<title abbrev="krb5-kdh">KRB5-KDH: Cryptographically binding Kerberos5 with Diffie-Hellman</title>
+<author initials="R" surname="Van Rein" fullname="Rick van Rein">
+<organization>InternetWide.org</organization>
+<address>
+<postal><street>Haarlebrink 5</street><city>Enschede</city><region>Overijssel</region><code>7544 WP</code><country>The Netherlands</country></postal>
+<email>rick@openfortress.nl</email>
+</address>
+</author>
+<date day="25" month="March" year="2015"/>
+<abstract>
+<t>This specification extends Kerberos5 with primitives that create a
+cryptographic binding between Kerberos5 authentication and
+Diffie-Hellman encryption. This yields their combined advantages.</t>
+</abstract>
+</front>
+</reference>
+
+<reference anchor='DNSTXT-KRB1'>
+<front>
+<title abbrev="DNS TXT &quot;v=krb1&quot;">Finding the Kerberos Realm of a Service in DNS</title>
+<author initials="R" surname="Van Rein" fullname="Rick van Rein">
+<organization>ARPA2.net</organization>
+<address>
+<postal>
+<street>Haarlebrink 5</street>
+<city>Enschede</city>
+<region>Overijssel</region>
+<code>7544 WP</code>
+<country>The Netherlands</country>
+</postal>
+<email>rick@openfortress.nl</email>
+</address>
+</author>
+<date day="25" month="March" year="2015"/>
+<abstract>
+<t>This specification defines methods to determine realm names 
+for services being contacted by their DNS name.  Currently,
+finding realm names is done through guessing or local configuration.
+DNS can make this process more dynamic, provided that DNSSEC is used
+to ensure authenticity of resource records.</t>
+</abstract>
+</front>
+</reference>
+
+<?rfc include="reference.RFC.2712.xml"?>
+<?rfc include="reference.RFC.3280.xml"?>
+<?rfc include="reference.RFC.4282.xml"?>
+<?rfc include="reference.RFC.4422.xml"?>
+<?rfc include="reference.RFC.4559.xml"?>
+<?rfc include="reference.RFC.6698.xml"?>
+<?rfc include="reference.RFC.6960.xml"?>
+
+</references>
+
+<section title="Acknowledgements" anchor="ack">
+
+<t>Thanks go to Simo Sorce for useful discussions during the creation of this
+document.</t>
+
+</section>
+
+</back>
+
+</rfc>

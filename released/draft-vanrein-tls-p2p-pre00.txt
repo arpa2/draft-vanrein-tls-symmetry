@@ -1,0 +1,392 @@
+
+
+
+
+Network Working Group                                        R. Van Rein
+Internet-Draft                                                 ARPA2.net
+Intended status: Standards Track                        October 12, 2015
+Expires: April 14, 2016
+
+
+                     TLS setup between Equal Peers
+                      draft-vanrein-tls-kdh-pre00
+
+Abstract
+
+   TLS is a generic protocol that runs over various other transports,
+   and that in turn carries many application protocols.  All current
+   transports and at least some application protocols are capable of
+   running between equal peers, in so-called peer-to-peer mode, but the
+   use of TLS destroys that capability.  This specification defines an
+   extension to remedy that limitation.
+
+Status of This Memo
+
+   This Internet-Draft is submitted in full conformance with the
+   provisions of BCP 78 and BCP 79.
+
+   Internet-Drafts are working documents of the Internet Engineering
+   Task Force (IETF).  Note that other groups may also distribute
+   working documents as Internet-Drafts.  The list of current Internet-
+   Drafts is at http://datatracker.ietf.org/drafts/current/.
+
+   Internet-Drafts are draft documents valid for a maximum of six months
+   and may be updated, replaced, or obsoleted by other documents at any
+   time.  It is inappropriate to use Internet-Drafts as reference
+   material or to cite them other than as "work in progress."
+
+   This Internet-Draft will expire on April 14, 2016.
+
+Copyright Notice
+
+   Copyright (c) 2015 IETF Trust and the persons identified as the
+   document authors.  All rights reserved.
+
+   This document is subject to BCP 78 and the IETF Trust's Legal
+   Provisions Relating to IETF Documents
+   (http://trustee.ietf.org/license-info) in effect on the date of
+   publication of this document.  Please review these documents
+   carefully, as they describe your rights and restrictions with respect
+   to this document.  Code Components extracted from this document must
+   include Simplified BSD License text as described in Section 4.e of
+
+
+
+
+Van Rein                 Expires April 14, 2016                 [Page 1]
+
+Internet-Draft                   P2P TLS                    October 2015
+
+
+   the Trust Legal Provisions and are provided without warranty as
+   described in the Simplified BSD License.
+
+Table of Contents
+
+   1.  Introduction  . . . . . . . . . . . . . . . . . . . . . . . .   2
+   2.  The tls_role_preference Extension . . . . . . . . . . . . . .   3
+   3.  Procedures  . . . . . . . . . . . . . . . . . . . . . . . . .   4
+     3.1.  Sending ClientHello with tls_role_preference Extension  .   4
+     3.2.  Receiving ClientHello with tls_role_preference Extension    4
+   4.  Efficiency Considerations . . . . . . . . . . . . . . . . . .   5
+   5.  Privacy Considerations  . . . . . . . . . . . . . . . . . . .   5
+   6.  Security Considerations . . . . . . . . . . . . . . . . . . .   5
+   7.  IANA Considerations . . . . . . . . . . . . . . . . . . . . .   5
+   8.  References  . . . . . . . . . . . . . . . . . . . . . . . . .   5
+     8.1.  Normative References  . . . . . . . . . . . . . . . . . .   6
+     8.2.  Informative References  . . . . . . . . . . . . . . . . .   6
+   Appendix A.  Acknowledgements . . . . . . . . . . . . . . . . . .   7
+   Author's Address  . . . . . . . . . . . . . . . . . . . . . . . .   7
+
+1.  Introduction
+
+   TLS is a successful carrier for application data on the Internet;
+   applications like SIP and XMPP can be run directly between peers,
+   possibly after discovery through a mechanism like DNS-SD.  Protection
+   of these connections is possible with TLS, but that requires a sudden
+   notion of which side acts as client, and which as server.  This
+   notion is not strictly required for the applications.
+
+   TLS can be carried over transports UDP, TCP and SCTP.  It is commonly
+   understood that UDP can be initiated from either side, but it is less
+   well-known that TCP and SCTP can also be connected when both end
+   points are active.  And indeed, this is achievable when one or both
+   end points have a known address, for instance as a result of
+   transparent addressing.  Lacking an obvious active and passive side,
+   there is no default to assume for the assignment of client and server
+   roles for TLS.
+
+   Finally, the need to authenticate a remote may help to decide which
+   side must play the role of client, and which is to be the server.  In
+   situations with mutual authentication using a more-or-less symmetric
+   authentication scheme, this last cause for a client/server role
+   division in TLS disappears.
+
+   This specification introduces a TLS extension that can be used to
+   indicate that the client/server role division is open for
+   negotiation.  It can also be used by a server that wants to actively
+   initiate a connection to a client.  The general idea is that both end
+
+
+
+Van Rein                 Expires April 14, 2016                 [Page 2]
+
+Internet-Draft                   P2P TLS                    October 2015
+
+
+   points may send a ClientHello, and based on the new extension a fully
+   deterministic choice is made how to proceed.
+
+   Client                                               Server
+
+                                <--------        [ClientHello]
+   ClientHello                  -------->
+                                                 [ClientHello]
+                                                   ServerHello
+                                             ServerKeyExchange
+                                <--------      ServerHelloDone
+   ClientKeyExchange
+   [ChangeCipherSpec]
+   Finished                     -------->
+                                            [ChangeCipherSpec]
+                                <--------             Finished
+   Application Data             <------->     Application Data
+
+2.  The tls_role_preference Extension
+
+   The tls_role_preference extension encapsulates a byte string of at
+   least 1 byte and at most 32 bytes; each of the bytes must have a
+   value of at least 33 and no more than 126; this makes the characters
+   suitable for textual protocols.
+
+   These tls_role_preference values may be compared on a byte-by-byte
+   basis to determine whether one is ordered before another.  When the
+   first byte value in a corresponding position is less in one then in
+   another, then the one is said to be ordered before the other.  When
+   the starting characters in one tls_role_preference value is
+   replicated in another but with extra characters appended, then the
+   one value is said to be ordered before the other.  When one
+   tls_role_preference values is exactly the same as another, they are
+   said to be ordered as equals.  When one tls_role_preference value is
+   neither ordered before, nor as an equal to another, then the one is
+   said to be ordered after the other.
+
+   An easy way to remember these ordering rules is that "client" is
+   ordered before "server"; and this hints at the intention: if one
+   tls_role_preference value is ordered before another, then the party
+   who sent the one value should take on the role of TLS client, whereas
+   the party that sent the other value should take on the role of TLS
+   server.  When two tls_role_preference are ordered as equal then the
+   surrounding TLS handshake fails, on grounds of not being able to
+   establish a client/server role distinction, which should be reported
+   through a handshake_failure alert.
+
+
+
+
+
+Van Rein                 Expires April 14, 2016                 [Page 3]
+
+Internet-Draft                   P2P TLS                    October 2015
+
+
+3.  Procedures
+
+   This section defines procedures for sending ClientHello and
+   processing the reception of one.
+
+3.1.  Sending ClientHello with tls_role_preference Extension
+
+   A ClientHello with the tls_role_preference extension may be sent once
+   by each of the sides, as the initiation of a TLS handshake.  The
+   order in which the sides send this extension is arbitrary.  It is
+   only possible to send a ClientHello with the tls_role_preference as
+   the first record in a TLS handshake, either on a fresh connection or
+   during (secure) renegotiation.
+
+   It is considered an error condition when both sides send a
+   ClientHello but not both incorporate the tls_role_preference
+   extension.  This must result in a an alert, the code of which should
+   be handshake_alert.  This implies that a server that is uncertain
+   about client support of the extension should wait for a ClientHello,
+   and respond with a ClientHello only when the tls_role_preference
+   extension is present.  In situations where it is known or assumed
+   that both sides support the tls_role_preference extension it is safe
+   to transmit the extension at any time.
+
+   The tls_role_preference value comprising of a single byte valued 33
+   will never have a value ordered before it; this can be sent to
+   require a client role.  The tls_role_preference value comprising of
+   32 bytes, all valued 126, will never have a value ordered after it;
+   this can be sent to require a server role.  When both sides require
+   the same role, a handshake_error alert will be the result.
+
+   When a side in the TLS hanshake is neutral about its role as a client
+   or a server, it can send any value in between, and it should send a
+   random value to achieve a high probabily of working with any remote
+   side.  The probability of running into a random value from the remote
+   that happens to be the same will be negligable for long enough
+   extension values.
+
+3.2.  Receiving ClientHello with tls_role_preference Extension
+
+   When a ClientHello with the tls_role_preference is received and a
+   ClientHello has not been sent yet, then a ClientHello with the
+   tls_role_preference must be sent before anything else.
+
+   After a ClientHello with tls_role_preference is both sent and
+   received, their values can be ordered.  When the value sent is
+   ordered before the value received, the local side will continue as a
+   TLS client and the value sent continues as the ClientHello record for
+
+
+
+Van Rein                 Expires April 14, 2016                 [Page 4]
+
+Internet-Draft                   P2P TLS                    October 2015
+
+
+   the TLS handshake, whereas the value received is strikken from the
+   TLS handshake.  When the value sent is ordered after the value
+   received, the local side will continue as a TLS server and the value
+   received continues as the ClientHello record for the TLS Handshake,
+   whereas the value sent is strikken from the TLS handshake.  When the
+   values sent and received are ordered as equals, a handshake_error
+   alert is locally processed..
+
+4.  Efficiency Considerations
+
+   The proposed protocol introduces one more record exchanged during a
+   TLS handshake.  When this record is generated asynchronously, there
+   is no need for an extra roundtrip, as both sides simply start sending
+   it as soon as they see the connection come up.  This however, is only
+   possible when it is known that the extension is supported; note that
+   this would be the most common situation in peer-to-peer protocols.
+
+   When the extension is negotiated by a side that defaults to the
+   client role, then a side that defaults to the server role would await
+   it and be required to send a response.  If this response lets the
+   sides take on their default roles, then no extra roundtrip is
+   required but an additional ClientHello is prefixed to the
+   ServerHello.  If the response switches sides, then half a roundtrip
+   is added, as the sides switch their roles.
+
+   The generated random values for the tls_role_preference extension
+   need not be cryptographically secure values; they merely exist to
+   force a decision on the client/role decision under the assumption of
+   a symmetric authentication protocol.  This can be achieved with a
+   lower quality random number generator.
+
+5.  Privacy Considerations
+
+6.  Security Considerations
+
+   TODO: added dynamicity: role switch does not apply to the
+   application; either side may enforce their role; symmetric
+   authentication; renegotiate always started from the client
+
+7.  IANA Considerations
+
+   TODO: register an extension code for tls_role_preference.
+
+8.  References
+
+
+
+
+
+
+
+Van Rein                 Expires April 14, 2016                 [Page 5]
+
+Internet-Draft                   P2P TLS                    October 2015
+
+
+8.1.  Normative References
+
+   [RFC4120]  Neuman, C., Yu, T., Hartman, S., and K. Raeburn, "The
+              Kerberos Network Authentication Service (V5)", RFC 4120,
+              July 2005.
+
+   [RFC4492]  Blake-Wilson, S., Bolyard, N., Gupta, V., Hawk, C., and B.
+              Moeller, "Elliptic Curve Cryptography (ECC) Cipher Suites
+              for Transport Layer Security (TLS)", RFC 4492, May 2006.
+
+   [RFC5246]  Dierks, T. and E. Rescorla, "The Transport Layer Security
+              (TLS) Protocol Version 1.2", RFC 5246, August 2008.
+
+   [RFC5746]  Rescorla, E., Ray, M., Dispensa, S., and N. Oskov,
+              "Transport Layer Security (TLS) Renegotiation Indication
+              Extension", RFC 5746, February 2010.
+
+   [RFC6066]  Eastlake, D., "Transport Layer Security (TLS) Extensions:
+              Extension Definitions", RFC 6066, January 2011.
+
+8.2.  Informative References
+
+   [KRB5-KDH]
+              Van Rein, R., "KRB5-KDH: Cryptographically binding
+              Kerberos5 with Diffie-Hellman", March 2015.
+
+   [DNSTXT-KRB1]
+              Van Rein, R., "Finding the Kerberos Realm of a Service in
+              DNS", March 2015.
+
+   [RFC2712]  Medvinsky, A. and M. Hur, "Addition of Kerberos Cipher
+              Suites to Transport Layer Security (TLS)", RFC 2712,
+              October 1999.
+
+   [RFC3280]  Housley, R., Polk, W., Ford, W., and D. Solo, "Internet
+              X.509 Public Key Infrastructure Certificate and
+              Certificate Revocation List (CRL) Profile", RFC 3280,
+              April 2002.
+
+   [RFC4282]  Aboba, B., Beadles, M., Arkko, J., and P. Eronen, "The
+              Network Access Identifier", RFC 4282, December 2005.
+
+   [RFC4422]  Melnikov, A. and K. Zeilenga, "Simple Authentication and
+              Security Layer (SASL)", RFC 4422, June 2006.
+
+   [RFC4559]  Jaganathan, K., Zhu, L., and J. Brezak, "SPNEGO-based
+              Kerberos and NTLM HTTP Authentication in Microsoft
+              Windows", RFC 4559, June 2006.
+
+
+
+Van Rein                 Expires April 14, 2016                 [Page 6]
+
+Internet-Draft                   P2P TLS                    October 2015
+
+
+   [RFC6698]  Hoffman, P. and J. Schlyter, "The DNS-Based Authentication
+              of Named Entities (DANE) Transport Layer Security (TLS)
+              Protocol: TLSA", RFC 6698, August 2012.
+
+   [RFC6960]  Santesson, S., Myers, M., Ankney, R., Malpani, A.,
+              Galperin, S., and C. Adams, "X.509 Internet Public Key
+              Infrastructure Online Certificate Status Protocol - OCSP",
+              RFC 6960, June 2013.
+
+Appendix A.  Acknowledgements
+
+   Thanks go to Simo Sorce for useful discussions during the creation of
+   this document.
+
+Author's Address
+
+   Rick van Rein
+   ARPA2.net
+   Haarlebrink 5
+   Enschede, Overijssel  7544 WP
+   The Netherlands
+
+   Email: rick@openfortress.nl
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Van Rein                 Expires April 14, 2016                 [Page 7]
